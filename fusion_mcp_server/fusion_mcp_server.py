@@ -243,37 +243,34 @@ def create_sphere(radius: float, body_name: str = None, plane_str: str = 'xy', c
     try:
         root = _app.activeProduct.rootComponent
         
-        # XZ平面にスケッチを作成（Y軸を回転軸として使用）
-        tempSketch = root.sketches.add(root.xZConstructionPlane)
+        # XY平面にスケッチを作成
+        tempSketch = root.sketches.add(root.xYConstructionPlane)
         
-        # 半円を描画（X軸に沿って配置、Y軸で回転）
-        # 円弧の中心を原点に、X方向にオフセットした半円を描く
-        startPt = adsk.core.Point3D.create(radius, 0, 0)
-        endPt = adsk.core.Point3D.create(-radius, 0, 0)
-        centerPt = adsk.core.Point3D.create(0, 0, 0)
-        
-        # 3点で円弧を作成
-        arc = tempSketch.sketchCurves.sketchArcs.addByThreePoints(
-            startPt,
-            adsk.core.Point3D.create(0, radius, 0),
-            endPt
-        )
-        
-        # 円弧の端点を直線で結ぶ
-        tempSketch.sketchCurves.sketchLines.addByTwoPoints(arc.startSketchPoint, arc.endSketchPoint)
-        
-        prof = tempSketch.profiles.item(0)
-        
-        # Z軸を回転軸として使用
-        revolves = root.features.revolveFeatures
-        
-        # 回転軸として直線を作成
+        # まず回転軸（構築線）を作成 - Y軸に沿った線
         axisLine = tempSketch.sketchCurves.sketchLines.addByTwoPoints(
-            adsk.core.Point3D.create(0, 0, -1),
-            adsk.core.Point3D.create(0, 0, 1)
+            adsk.core.Point3D.create(0, -radius - 1, 0),
+            adsk.core.Point3D.create(0, radius + 1, 0)
         )
         axisLine.isConstruction = True
         
+        # 半円を描画（Y軸の右側に配置）
+        # 3点で円弧を作成（上端、右端、下端）
+        arc = tempSketch.sketchCurves.sketchArcs.addByThreePoints(
+            adsk.core.Point3D.create(0, radius, 0),      # 上端
+            adsk.core.Point3D.create(radius, 0, 0),      # 右端（最も遠い点）
+            adsk.core.Point3D.create(0, -radius, 0)      # 下端
+        )
+        
+        # 円弧の端点を直線で結ぶ（半円を閉じる）
+        closingLine = tempSketch.sketchCurves.sketchLines.addByTwoPoints(
+            arc.startSketchPoint, 
+            arc.endSketchPoint
+        )
+        
+        prof = tempSketch.profiles.item(0)
+        
+        # 回転フィーチャーを作成
+        revolves = root.features.revolveFeatures
         revolveInput = revolves.createInput(prof, axisLine, adsk.fusion.FeatureOperations.NewBodyFeatureOperation)
         angle = adsk.core.ValueInput.createByReal(math.pi * 2)
         revolveInput.setAngleExtent(False, angle)
