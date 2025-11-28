@@ -1,17 +1,17 @@
 
 
-¡ƒ^[ƒ~ƒiƒ‹
+â– ã‚¿ãƒ¼ãƒŸãƒŠãƒ«
 node server.js
 
 > Fusion MCP Server running at http://localhost:30000
 
-¡VSCode
-mcp.json‚©‚ç
+â– VSCode
+mcp.jsonã‹ã‚‰
 "fusion-cad"
-‚ð‹N“®
+ã‚’èµ·å‹•
 
 Autodesk Fusion
-uƒAƒhƒCƒ“vËufusion_mcp_serverv‚ð‹N“®
-‚È‚º‚©A‘O‰ñ‹N“®Ï‚Ý‚ÌƒAƒhƒCƒ“‚ªÁ‚¦‚Ä‚¢‚éê‡‚ÍA‚à‚¤ˆê“xì‚è‚È‚¨‚µBB
+ã€Œã‚¢ãƒ‰ã‚¤ãƒ³ã€â‡’ã€Œfusion_mcp_serverã€ã‚’èµ·å‹•
+ãªãœã‹ã€å‰å›žèµ·å‹•æ¸ˆã¿ã®ã‚¢ãƒ‰ã‚¤ãƒ³ãŒæ¶ˆãˆã¦ã„ã‚‹å ´åˆã¯ã€ã‚‚ã†ä¸€åº¦ä½œã‚ŠãªãŠã—ã€‚ã€‚
 
 
