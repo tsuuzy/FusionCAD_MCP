@@ -1,0 +1,10 @@
+
+
+■ターミナル1
+node server.js
+
+> Fusion MCP Server running at http://localhost:30000
+
+■ターミナル2
+curl --noproxy localhost -X POST http://localhost:3000/mcp/fusion-command -H "Content-Type: application/json" -d "{\"command\": \"create_cube 10\"}"
+

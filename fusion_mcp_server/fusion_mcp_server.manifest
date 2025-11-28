@@ -1,0 +1,10 @@
+{
+    "toolkit": "fusion360",
+    "type": "addin",
+    "id": "fusion_mcp_server",
+    "name": "Fusion MCP Server",
+    "author": "Your Name",
+    "description": "Fusion 360 MCP Add-in",
+    "version": "1.0.0",
+    "runOnStartup": true
+}
