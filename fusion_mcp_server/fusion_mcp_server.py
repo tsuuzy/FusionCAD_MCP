@@ -20,9 +20,12 @@ _event_handler = None
 
 def write_response(message: str):
     """MCPサーバーへのレスポンスをファイルに書き込む"""
+    import time as _time
     try:
         with open(_response_file_path, 'w', encoding='utf-8') as f:
             f.write(message)
+            f.flush()
+        _time.sleep(0.1)  # ファイルが確実に書き込まれるまで待機
     except:
         pass 
 
