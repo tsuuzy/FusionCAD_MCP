@@ -2,13 +2,15 @@
 """
 Fusion 360 MCP Bridge Server
 GitHub Copilot/Claude から Fusion 360 を制御するための MCP サーバー
+HTTP経由でFusion Add-inと直接通信
 """
 
 import asyncio
 import json
 import os
 import sys
-import time
+import urllib.request
+import urllib.error
 from typing import Any
 
 # MCP SDK のインポート
@@ -20,63 +22,47 @@ from mcp.types import (
     CallToolResult,
 )
 
-# コマンドファイルのパス（Fusion Add-in と共有）
-COMMAND_FILE_PATH = os.environ.get(
-    'FUSION_COMMAND_FILE',
-    'C:\\Users\\tomo123\\Documents\\fusion_command.txt'
-)
-
-RESPONSE_FILE_PATH = os.environ.get(
-    'FUSION_RESPONSE_FILE', 
-    'C:\\Users\\tomo123\\Documents\\fusion_response.txt'
-)
+# Fusion Add-in の HTTP サーバーアドレス
+FUSION_HTTP_HOST = os.environ.get('FUSION_HTTP_HOST', 'localhost')
+FUSION_HTTP_PORT = int(os.environ.get('FUSION_HTTP_PORT', '8080'))
 
 # MCPサーバーのインスタンス
 app = Server("fusion-cad-mcp-server")
 
+# プロキシを無効化（localhost 接続用）
+proxy_handler = urllib.request.ProxyHandler({})
+opener = urllib.request.build_opener(proxy_handler)
+urllib.request.install_opener(opener)
 
-def send_command_to_fusion(command: str, timeout: float = 10.0) -> str:
+
+def send_command_to_fusion(command: str, timeout: float = 30.0) -> str:
     """
-    コマンドをFusion Add-inに送信し、レスポンスを待つ
+    HTTPでFusion Add-inにコマンドを送信し、レスポンスを受け取る
+    プロキシを使用せずに直接接続
     """
     try:
-        # レスポンスファイルをクリア（リトライ付き）
-        for _ in range(5):
-            try:
-                if os.path.exists(RESPONSE_FILE_PATH):
-                    os.remove(RESPONSE_FILE_PATH)
-                break
-            except PermissionError:
-                time.sleep(0.2)
+        url = f"http://{FUSION_HTTP_HOST}:{FUSION_HTTP_PORT}/command"
+        data = json.dumps({"command": command}).encode('utf-8')
         
-        # コマンドをファイルに書き込み
-        with open(COMMAND_FILE_PATH, 'w', encoding='utf-8') as f:
-            f.write(command)
+        req = urllib.request.Request(
+            url,
+            data=data,
+            headers={'Content-Type': 'application/json'},
+            method='POST'
+        )
         
-        # レスポンスを待つ（タイムアウト付き）
-        start_time = time.time()
-        while time.time() - start_time < timeout:
-            if os.path.exists(RESPONSE_FILE_PATH):
-                # ファイルが書き込み完了するまで少し待つ
-                time.sleep(0.3)
-                try:
-                    with open(RESPONSE_FILE_PATH, 'r', encoding='utf-8') as f:
-                        response = f.read().strip()
-                        if response:
-                            try:
-                                os.remove(RESPONSE_FILE_PATH)
-                            except PermissionError:
-                                pass  # 削除できなくても続行
-                            return response
-                except PermissionError:
-                    time.sleep(0.2)
-                    continue
-            time.sleep(0.1)
+        # プロキシを使用しないopenerを毎回作成して使用
+        no_proxy_handler = urllib.request.ProxyHandler({})
+        opener = urllib.request.build_opener(no_proxy_handler)
         
-        return f"Command sent: {command} (no response received within {timeout}s)"
+        with opener.open(req, timeout=timeout) as response:
+            result = json.loads(response.read().decode('utf-8'))
+            return result.get('message', 'Command executed')
     
+    except urllib.error.URLError as e:
+        return f"Error: Fusion 360 Add-in に接続できません。Add-in が実行中か確認してください。({str(e)})"
     except Exception as e:
-        return f"Error sending command: {str(e)}"
+        return f"Error: {str(e)}"
 
 
 @app.list_tools()

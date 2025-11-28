@@ -4,30 +4,109 @@ import threading
 import time
 import os
 import math
+import json
+from http.server import HTTPServer, BaseHTTPRequestHandler
+from functools import partial
 
 # --- グローバル変数 ---
 _app = None
 _ui = None
-# ユーザー指定のファイルパスを反映
-_command_file_path = 'C:\\Users\\7020722\\Documents\\fusion_command.txt'
-_response_file_path = 'C:\\Users\\7020722\\Documents\\fusion_response.txt'
-_file_watcher_thread = None 
+_http_server = None
+_http_server_thread = None
 _stop_flag = None 
 _command_received_event_id = 'FusionMCPCommandReceived'
 _command_received_event = None
 _event_handler = None
+_last_response = None  # HTTP レスポンス用
+_response_ready = threading.Event()
+
+# HTTP サーバー設定
+HTTP_HOST = '127.0.0.1'
+HTTP_PORT = 8080
 
 
 def write_response(message: str):
-    """MCPサーバーへのレスポンスをファイルに書き込む"""
-    import time as _time
+    """MCPサーバーへのレスポンスを設定する（HTTP用）"""
+    global _last_response
+    _last_response = message
+    _response_ready.set()
+
+
+# --- HTTP サーバー ---
+
+class FusionHTTPHandler(BaseHTTPRequestHandler):
+    """HTTP リクエストを処理するハンドラ"""
+    
+    def log_message(self, format, *args):
+        # ログ出力を抑制（必要なら有効化）
+        pass
+    
+    def do_POST(self):
+        global _last_response
+        
+        if self.path == '/command':
+            content_length = int(self.headers['Content-Length'])
+            post_data = self.rfile.read(content_length)
+            
+            try:
+                data = json.loads(post_data.decode('utf-8'))
+                command = data.get('command', '')
+                
+                # レスポンスをリセット
+                _last_response = None
+                _response_ready.clear()
+                
+                # Fusion のメインスレッドでコマンドを実行
+                _app.fireCustomEvent(_command_received_event_id, command)
+                
+                # レスポンスを待つ（最大30秒）
+                if _response_ready.wait(timeout=30.0):
+                    response = {'status': 'success', 'message': _last_response}
+                else:
+                    response = {'status': 'timeout', 'message': 'Command execution timeout'}
+                
+                self.send_response(200)
+                self.send_header('Content-Type', 'application/json')
+                self.end_headers()
+                self.wfile.write(json.dumps(response).encode('utf-8'))
+                
+            except Exception as e:
+                self.send_response(500)
+                self.send_header('Content-Type', 'application/json')
+                self.end_headers()
+                error_response = {'status': 'error', 'message': str(e)}
+                self.wfile.write(json.dumps(error_response).encode('utf-8'))
+        else:
+            self.send_response(404)
+            self.end_headers()
+    
+    def do_GET(self):
+        """ヘルスチェック用"""
+        if self.path == '/health':
+            self.send_response(200)
+            self.send_header('Content-Type', 'application/json')
+            self.end_headers()
+            self.wfile.write(json.dumps({'status': 'ok'}).encode('utf-8'))
+        else:
+            self.send_response(404)
+            self.end_headers()
+
+
+def run_http_server(stop_flag):
+    """HTTP サーバーを別スレッドで実行"""
+    global _http_server
     try:
-        with open(_response_file_path, 'w', encoding='utf-8') as f:
-            f.write(message)
-            f.flush()
-        _time.sleep(0.1)  # ファイルが確実に書き込まれるまで待機
-    except:
-        pass 
+        _http_server = HTTPServer((HTTP_HOST, HTTP_PORT), FusionHTTPHandler)
+        _http_server.timeout = 1.0  # 1秒ごとにチェック
+        
+        while not stop_flag.is_set():
+            _http_server.handle_request()
+    except Exception as e:
+        if _ui:
+            _ui.palettes.itemById('TextCommands').writeText(f"HTTP Server error: {str(e)}")
+    finally:
+        if _http_server:
+            _http_server.server_close() 
 
 # --- ヘルパー関数 ---
 def get_construction_plane(root: adsk.fusion.Component, plane_str: str):
@@ -164,18 +243,38 @@ def create_sphere(radius: float, body_name: str = None, plane_str: str = 'xy', c
     try:
         root = _app.activeProduct.rootComponent
         
+        # XZ平面にスケッチを作成（Y軸を回転軸として使用）
         tempSketch = root.sketches.add(root.xZConstructionPlane)
+        
+        # 半円を描画（X軸に沿って配置、Y軸で回転）
+        # 円弧の中心を原点に、X方向にオフセットした半円を描く
+        startPt = adsk.core.Point3D.create(radius, 0, 0)
+        endPt = adsk.core.Point3D.create(-radius, 0, 0)
         centerPt = adsk.core.Point3D.create(0, 0, 0)
         
-        arc = tempSketch.sketchCurves.sketchArcs.addByCenterStartEnd(centerPt, 
-                                                                    adsk.core.Point3D.create(0, radius, 0),
-                                                                    adsk.core.Point3D.create(0, -radius, 0))
+        # 3点で円弧を作成
+        arc = tempSketch.sketchCurves.sketchArcs.addByThreePoints(
+            startPt,
+            adsk.core.Point3D.create(0, radius, 0),
+            endPt
+        )
+        
+        # 円弧の端点を直線で結ぶ
         tempSketch.sketchCurves.sketchLines.addByTwoPoints(arc.startSketchPoint, arc.endSketchPoint)
         
         prof = tempSketch.profiles.item(0)
         
+        # Z軸を回転軸として使用
         revolves = root.features.revolveFeatures
-        revolveInput = revolves.createInput(prof, root.yConstructionAxis, adsk.fusion.FeatureOperations.NewBodyFeatureOperation)
+        
+        # 回転軸として直線を作成
+        axisLine = tempSketch.sketchCurves.sketchLines.addByTwoPoints(
+            adsk.core.Point3D.create(0, 0, -1),
+            adsk.core.Point3D.create(0, 0, 1)
+        )
+        axisLine.isConstruction = True
+        
+        revolveInput = revolves.createInput(prof, axisLine, adsk.fusion.FeatureOperations.NewBodyFeatureOperation)
         angle = adsk.core.ValueInput.createByReal(math.pi * 2)
         revolveInput.setAngleExtent(False, angle)
 
@@ -184,15 +283,17 @@ def create_sphere(radius: float, body_name: str = None, plane_str: str = 'xy', c
         
         tempSketch.isVisible = False
         
-        bodiesToMove = adsk.core.ObjectCollection.create()
-        bodiesToMove.add(new_body)
-        vector = adsk.core.Vector3D.create(cx, cy, cz)
-        transform = adsk.core.Matrix3D.create()
-        transform.translation = vector
-        
-        moveFeats = root.features.moveFeatures
-        moveInput = moveFeats.createInput(bodiesToMove, transform)
-        moveFeats.add(moveInput)
+        # 指定された位置に移動
+        if cx != 0 or cy != 0 or cz != 0:
+            bodiesToMove = adsk.core.ObjectCollection.create()
+            bodiesToMove.add(new_body)
+            vector = adsk.core.Vector3D.create(cx, cy, cz)
+            transform = adsk.core.Matrix3D.create()
+            transform.translation = vector
+            
+            moveFeats = root.features.moveFeatures
+            moveInput = moveFeats.createInput(bodiesToMove, transform)
+            moveFeats.add(moveInput)
         
         if body_name:
             new_body.name = body_name
@@ -907,30 +1008,10 @@ class CommandReceivedEventHandler(adsk.core.CustomEventHandler):
             _ui.messageBox(f'An unexpected error occurred in notify handler:\n{traceback.format_exc()}')
 
 
-def file_watcher(stop_flag):
-    """別スレッドでファイルを監視する関数"""
-    last_modified = 0
-    while not stop_flag.is_set():
-        try:
-            if os.path.exists(_command_file_path):
-                modified = os.path.getmtime(_command_file_path)
-                if modified > last_modified:
-                    last_modified = modified
-                    with open(_command_file_path, 'r+', encoding='utf-8') as f:
-                        command = f.read().strip()
-                        if command:
-                            _app.fireCustomEvent(_command_received_event_id, command)
-                            f.seek(0)
-                            f.truncate()
-        except:
-            pass
-        time.sleep(1)
-
-
 # --- アドインのメインライフサイクル ---
 
 def run(context):
-    global _app, _ui, _command_file_path, _file_watcher_thread, _stop_flag, _command_received_event, _event_handler
+    global _app, _ui, _http_server_thread, _stop_flag, _command_received_event, _event_handler
 
     _app = adsk.core.Application.get()
     _ui  = _app.userInterface
@@ -943,16 +1024,26 @@ def run(context):
         _ui.messageBox(f'Failed to register custom event:\n{traceback.format_exc()}')
         return
 
+    # HTTP サーバーを開始
     _stop_flag = threading.Event()
-    _file_watcher_thread = threading.Thread(target=file_watcher, args=(_stop_flag,))
-    _file_watcher_thread.start()
+    _http_server_thread = threading.Thread(target=run_http_server, args=(_stop_flag,))
+    _http_server_thread.daemon = True
+    _http_server_thread.start()
 
-    _ui.palettes.itemById('TextCommands').writeText("Fusion MCP Add-in (v25) has started. Waiting for commands...")
+    _ui.palettes.itemById('TextCommands').writeText(f"Fusion MCP Add-in (HTTP) started. Listening on http://{HTTP_HOST}:{HTTP_PORT}")
 
 
 def stop(context):
+    global _http_server
+    
     if _stop_flag:
         _stop_flag.set()
+    
+    if _http_server:
+        try:
+            _http_server.shutdown()
+        except:
+            pass
     
     if _command_received_event and _event_handler:
         _command_received_event.remove(_event_handler)
