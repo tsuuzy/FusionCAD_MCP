@@ -1,8 +1,10 @@
 #!/usr/bin/env python3
 """
-Fusion 360 MCP Bridge Server
+Fusion 360 MCP Bridge Server - 動的API対応版
 GitHub Copilot/Claude から Fusion 360 を制御するための MCP サーバー
-HTTP経由でFusion Add-inと直接通信
+
+このバージョンでは、adsk.core と adsk.fusion の全APIに
+動的にアクセスできるようになっています。
 """
 
 import asyncio
@@ -65,297 +67,137 @@ def send_command_to_fusion(command: str, timeout: float = 30.0) -> str:
         return f"Error: {str(e)}"
 
 
+def send_json_command(cmd_type: str, **kwargs) -> dict:
+    """
+    JSON形式のコマンドをFusion Add-inに送信する
+    
+    Args:
+        cmd_type: コマンドタイプ（execute_code, get_api_info, get_state）
+        **kwargs: コマンドに応じた追加パラメータ
+        
+    Returns:
+        dict: Fusion Add-inからのレスポンス
+    """
+    try:
+        command = json.dumps({'type': cmd_type, **kwargs})
+        result_str = send_command_to_fusion(command)
+        
+        # JSONレスポンスをパース
+        try:
+            return json.loads(result_str)
+        except json.JSONDecodeError:
+            return {'success': False, 'error': result_str, 'raw': result_str}
+            
+    except Exception as e:
+        return {'success': False, 'error': str(e)}
+
+
 @app.list_tools()
 async def list_tools() -> list[Tool]:
     """
     利用可能なツール（Fusionコマンド）の一覧を返す
+    
+    動的APIツール:
+    - execute_fusion_code: 任意のPythonコードを実行
+    - get_fusion_api_info: API情報を取得
+    - get_fusion_state: 現在の状態を取得
     """
     return [
-        # === 基本形状作成 ===
         Tool(
-            name="create_cube",
-            description="Fusion 360で立方体を作成します。サイズはmmで指定。",
+            name="execute_fusion_code",
+            description="""Fusion 360で任意のPythonコードを実行します。
+            
+adsk.core, adsk.fusion, adsk.cam の全APIにアクセス可能です。
+
+利用可能な事前定義変数:
+- app: adsk.core.Application インスタンス
+- ui: adsk.core.UserInterface インスタンス
+- design: 現在のDesign (ある場合)
+- root: ルートコンポーネント (ある場合)
+- Point3D, Vector3D, Matrix3D, ObjectCollection, ValueInput: よく使う型
+
+コード内で 'result' 変数に値を代入すると、その値が返されます。
+print() の出力も 'output' として返されます。
+
+例1: ボディ一覧を取得
+```python
+result = [b.name for b in root.bRepBodies]
+```
+
+例2: スケッチを作成して円を描く
+```python
+sketch = root.sketches.add(root.xYConstructionPlane)
+circles = sketch.sketchCurves.sketchCircles
+circle = circles.addByCenterRadius(Point3D.create(0, 0, 0), 2.0)
+result = f"Circle created with radius {circle.radius}"
+```
+
+例3: パラメトリック設計
+```python
+params = design.allParameters
+for p in params:
+    print(f"{p.name} = {p.expression}")
+```
+
+例4: 立方体を作成
+```python
+sketch = root.sketches.add(root.xYConstructionPlane)
+lines = sketch.sketchCurves.sketchLines
+lines.addTwoPointRectangle(Point3D.create(-1, -1, 0), Point3D.create(1, 1, 0))
+prof = sketch.profiles.item(0)
+extrudes = root.features.extrudeFeatures
+extInput = extrudes.createInput(prof, fusion.FeatureOperations.NewBodyFeatureOperation)
+extInput.setDistanceExtent(False, ValueInput.createByReal(2))
+extrudes.add(extInput)
+result = "Cube created!"
+```""",
             inputSchema={
                 "type": "object",
                 "properties": {
-                    "size": {
-                        "type": "number",
-                        "description": "立方体の一辺のサイズ (mm)"
-                    },
-                    "name": {
+                    "code": {
                         "type": "string",
-                        "description": "ボディの名前（オプション）"
-                    },
-                    "plane": {
-                        "type": "string",
-                        "enum": ["xy", "yz", "xz"],
-                        "description": "作成する平面 (デフォルト: xy)"
-                    },
-                    "cx": {
-                        "type": "number",
-                        "description": "中心X座標 (mm, デフォルト: 0)"
-                    },
-                    "cy": {
-                        "type": "number",
-                        "description": "中心Y座標 (mm, デフォルト: 0)"
-                    },
-                    "cz": {
-                        "type": "number",
-                        "description": "中心Z座標 (mm, デフォルト: 0)"
+                        "description": "実行するPythonコード。adsk.core/fusion/cam の全APIが使用可能"
                     }
                 },
-                "required": ["size"]
+                "required": ["code"]
             }
         ),
         Tool(
-            name="create_cylinder",
-            description="Fusion 360で円柱を作成します。",
+            name="get_fusion_api_info",
+            description="""Fusion 360 APIのドキュメント情報を取得します。
+
+モジュールやクラスのメソッド、プロパティ、定数などの情報を取得できます。
+
+使用例:
+- module_path="adsk.fusion.BRepBody" でBRepBodyクラスの情報を取得
+- object_type="Component" でComponentの情報を取得
+- 両方省略でモジュール一覧を取得""",
             inputSchema={
                 "type": "object",
                 "properties": {
-                    "radius": {
-                        "type": "number",
-                        "description": "円柱の半径 (mm)"
-                    },
-                    "height": {
-                        "type": "number",
-                        "description": "円柱の高さ (mm)"
-                    },
-                    "name": {
+                    "module_path": {
                         "type": "string",
-                        "description": "ボディの名前（オプション）"
+                        "description": "モジュールパス (例: 'adsk.fusion.ExtrudeFeatures')"
                     },
-                    "plane": {
+                    "object_type": {
                         "type": "string",
-                        "enum": ["xy", "yz", "xz"],
-                        "description": "作成する平面 (デフォルト: xy)"
-                    },
-                    "cx": {"type": "number", "description": "中心X座標 (mm)"},
-                    "cy": {"type": "number", "description": "中心Y座標 (mm)"},
-                    "cz": {"type": "number", "description": "中心Z座標 (mm)"}
-                },
-                "required": ["radius", "height"]
-            }
-        ),
-        Tool(
-            name="create_box",
-            description="Fusion 360で直方体（ボックス）を作成します。",
-            inputSchema={
-                "type": "object",
-                "properties": {
-                    "width": {"type": "number", "description": "幅 (mm)"},
-                    "depth": {"type": "number", "description": "奥行き (mm)"},
-                    "height": {"type": "number", "description": "高さ (mm)"},
-                    "name": {"type": "string", "description": "ボディの名前"},
-                    "plane": {"type": "string", "enum": ["xy", "yz", "xz"]},
-                    "cx": {"type": "number", "description": "中心X座標 (mm)"},
-                    "cy": {"type": "number", "description": "中心Y座標 (mm)"},
-                    "cz": {"type": "number", "description": "中心Z座標 (mm)"}
-                },
-                "required": ["width", "depth", "height"]
-            }
-        ),
-        Tool(
-            name="create_sphere",
-            description="Fusion 360で球を作成します。",
-            inputSchema={
-                "type": "object",
-                "properties": {
-                    "radius": {"type": "number", "description": "半径 (mm)"},
-                    "name": {"type": "string", "description": "ボディの名前"},
-                    "plane": {"type": "string", "enum": ["xy", "yz", "xz"]},
-                    "cx": {"type": "number", "description": "中心X座標 (mm)"},
-                    "cy": {"type": "number", "description": "中心Y座標 (mm)"},
-                    "cz": {"type": "number", "description": "中心Z座標 (mm)"}
-                },
-                "required": ["radius"]
-            }
-        ),
-        Tool(
-            name="create_cone",
-            description="Fusion 360で円錐を作成します。",
-            inputSchema={
-                "type": "object",
-                "properties": {
-                    "radius": {"type": "number", "description": "底面の半径 (mm)"},
-                    "height": {"type": "number", "description": "高さ (mm)"},
-                    "name": {"type": "string", "description": "ボディの名前"},
-                    "plane": {"type": "string", "enum": ["xy", "yz", "xz"]},
-                    "cx": {"type": "number", "description": "中心X座標 (mm)"},
-                    "cy": {"type": "number", "description": "中心Y座標 (mm)"},
-                    "cz": {"type": "number", "description": "中心Z座標 (mm)"}
-                },
-                "required": ["radius", "height"]
-            }
-        ),
-        Tool(
-            name="create_sq_pyramid",
-            description="Fusion 360で四角錐を作成します。",
-            inputSchema={
-                "type": "object",
-                "properties": {
-                    "side_length": {"type": "number", "description": "底面の一辺の長さ (mm)"},
-                    "height": {"type": "number", "description": "高さ (mm)"},
-                    "name": {"type": "string", "description": "ボディの名前"},
-                    "plane": {"type": "string", "enum": ["xy", "yz", "xz"]},
-                    "cx": {"type": "number", "description": "中心X座標 (mm)"},
-                    "cy": {"type": "number", "description": "中心Y座標 (mm)"},
-                    "cz": {"type": "number", "description": "中心Z座標 (mm)"}
-                },
-                "required": ["side_length", "height"]
-            }
-        ),
-        Tool(
-            name="create_tri_pyramid",
-            description="Fusion 360で正三角錐を作成します。",
-            inputSchema={
-                "type": "object",
-                "properties": {
-                    "side_length": {"type": "number", "description": "底面の一辺の長さ (mm)"},
-                    "height": {"type": "number", "description": "高さ (mm)"},
-                    "name": {"type": "string", "description": "ボディの名前"},
-                    "plane": {"type": "string", "enum": ["xy", "yz", "xz"]},
-                    "cx": {"type": "number", "description": "中心X座標 (mm)"},
-                    "cy": {"type": "number", "description": "中心Y座標 (mm)"},
-                    "cz": {"type": "number", "description": "中心Z座標 (mm)"}
-                },
-                "required": ["side_length", "height"]
-            }
-        ),
-        
-        # === 選択操作 ===
-        Tool(
-            name="select_body",
-            description="指定した名前のボディを選択します。",
-            inputSchema={
-                "type": "object",
-                "properties": {
-                    "body_name": {"type": "string", "description": "選択するボディの名前"}
-                },
-                "required": ["body_name"]
-            }
-        ),
-        Tool(
-            name="select_bodies",
-            description="指定した2つのボディを選択します（結合操作用）。",
-            inputSchema={
-                "type": "object",
-                "properties": {
-                    "body_name1": {"type": "string", "description": "1つ目のボディの名前"},
-                    "body_name2": {"type": "string", "description": "2つ目のボディの名前"}
-                },
-                "required": ["body_name1", "body_name2"]
-            }
-        ),
-        Tool(
-            name="select_edges",
-            description="指定したボディのエッジを選択します。",
-            inputSchema={
-                "type": "object",
-                "properties": {
-                    "body_name": {"type": "string", "description": "ボディの名前"},
-                    "edge_type": {
-                        "type": "string",
-                        "enum": ["all", "circular"],
-                        "description": "選択するエッジの種類"
+                        "description": "オブジェクトタイプ名 (例: 'Sketch', 'Component')"
                     }
                 },
-                "required": ["body_name", "edge_type"]
-            }
-        ),
-        
-        # === 編集操作 ===
-        Tool(
-            name="add_fillet",
-            description="選択されているエッジにフィレット（角の丸み）を追加します。事前にselect_edgesでエッジを選択してください。",
-            inputSchema={
-                "type": "object",
-                "properties": {
-                    "radius": {"type": "number", "description": "フィレットの半径 (mm)"}
-                },
-                "required": ["radius"]
-            }
-        ),
-        Tool(
-            name="move_selection",
-            description="選択されているボディを移動します。事前にselect_bodyでボディを選択してください。",
-            inputSchema={
-                "type": "object",
-                "properties": {
-                    "x_dist": {"type": "number", "description": "X方向の移動距離 (mm)"},
-                    "y_dist": {"type": "number", "description": "Y方向の移動距離 (mm)"},
-                    "z_dist": {"type": "number", "description": "Z方向の移動距離 (mm)"}
-                },
-                "required": ["x_dist", "y_dist", "z_dist"]
-            }
-        ),
-        Tool(
-            name="rotate_selection",
-            description="選択されているボディを回転します。事前にselect_bodyでボディを選択してください。",
-            inputSchema={
-                "type": "object",
-                "properties": {
-                    "axis": {
-                        "type": "string",
-                        "enum": ["x", "y", "z"],
-                        "description": "回転軸"
-                    },
-                    "angle": {"type": "number", "description": "回転角度 (度)"},
-                    "cx": {"type": "number", "description": "回転中心X座標 (mm)"},
-                    "cy": {"type": "number", "description": "回転中心Y座標 (mm)"},
-                    "cz": {"type": "number", "description": "回転中心Z座標 (mm)"}
-                },
-                "required": ["axis", "angle", "cx", "cy", "cz"]
-            }
-        ),
-        
-        # === ブール演算 ===
-        Tool(
-            name="combine_selection",
-            description="選択されている2つのボディを結合/切り取り/交差させます。事前にselect_bodiesで2つのボディを選択してください。",
-            inputSchema={
-                "type": "object",
-                "properties": {
-                    "operation": {
-                        "type": "string",
-                        "enum": ["join", "cut", "intersect"],
-                        "description": "操作の種類: join(結合), cut(切り取り), intersect(交差)"
-                    }
-                },
-                "required": ["operation"]
-            }
-        ),
-        Tool(
-            name="combine_by_name",
-            description="名前で指定した2つのボディに対してブール演算を実行します。",
-            inputSchema={
-                "type": "object",
-                "properties": {
-                    "target_body": {"type": "string", "description": "ターゲットボディの名前（残る方）"},
-                    "tool_body": {"type": "string", "description": "ツールボディの名前（操作に使用）"},
-                    "operation": {
-                        "type": "string",
-                        "enum": ["join", "cut", "intersect"],
-                        "description": "操作の種類"
-                    }
-                },
-                "required": ["target_body", "tool_body", "operation"]
-            }
-        ),
-        
-        # === 履歴操作 ===
-        Tool(
-            name="undo",
-            description="直前の操作を元に戻します。",
-            inputSchema={
-                "type": "object",
-                "properties": {},
                 "required": []
             }
         ),
         Tool(
-            name="redo",
-            description="元に戻した操作をやり直します。",
+            name="get_fusion_state",
+            description="""Fusion 360の現在の状態を取得します。
+
+以下の情報を返します:
+- アクティブドキュメント情報
+- コンポーネント階層
+- ボディ一覧（名前、可視性、体積、面/エッジ数）
+- スケッチ一覧
+- フィーチャー（タイムライン）一覧
+- 現在の選択状態""",
             inputSchema={
                 "type": "object",
                 "properties": {},
@@ -371,137 +213,47 @@ async def call_tool(name: str, arguments: dict[str, Any]) -> list[TextContent]:
     ツールを実行し、Fusion Add-inにコマンドを送信する
     """
     try:
-        command = build_command(name, arguments)
-        result = send_command_to_fusion(command)
-        return [TextContent(type="text", text=result)]
+        if name == "execute_fusion_code":
+            code = arguments.get("code", "")
+            result = send_json_command("execute_code", code=code)
+            
+            if result.get('success'):
+                output_parts = []
+                if result.get('output'):
+                    output_parts.append(f"Output:\n{result['output']}")
+                if result.get('result'):
+                    output_parts.append(f"Result: {result['result']}")
+                if not output_parts:
+                    output_parts.append("Code executed successfully (no output)")
+                return [TextContent(type="text", text="\n".join(output_parts))]
+            else:
+                return [TextContent(type="text", text=f"Error: {result.get('error', 'Unknown error')}")]
+        
+        elif name == "get_fusion_api_info":
+            module_path = arguments.get("module_path")
+            object_type = arguments.get("object_type")
+            result = send_json_command("get_api_info", module_path=module_path, object_type=object_type)
+            
+            if result.get('success'):
+                info = result.get('info', {})
+                return [TextContent(type="text", text=json.dumps(info, indent=2, ensure_ascii=False))]
+            else:
+                return [TextContent(type="text", text=f"Error: {result.get('error', 'Unknown error')}")]
+        
+        elif name == "get_fusion_state":
+            result = send_json_command("get_state")
+            
+            if result.get('success'):
+                state = result.get('state', {})
+                return [TextContent(type="text", text=json.dumps(state, indent=2, ensure_ascii=False))]
+            else:
+                return [TextContent(type="text", text=f"Error: {result.get('error', 'Unknown error')}")]
+        
+        else:
+            return [TextContent(type="text", text=f"Unknown tool: {name}")]
+            
     except Exception as e:
         return [TextContent(type="text", text=f"Error: {str(e)}")]
-
-
-def build_command(name: str, args: dict[str, Any]) -> str:
-    """
-    ツール名と引数からFusion Add-in用のコマンド文字列を構築
-    """
-    
-    if name == "create_cube":
-        size = args.get("size", 10)
-        body_name = args.get("name", "none")
-        plane = args.get("plane", "xy")
-        cx = args.get("cx", 0)
-        cy = args.get("cy", 0)
-        cz = args.get("cz", 0)
-        return f"create_cube {size} {body_name} {plane} {cx} {cy} {cz}"
-    
-    elif name == "create_cylinder":
-        radius = args.get("radius", 5)
-        height = args.get("height", 10)
-        body_name = args.get("name", "none")
-        plane = args.get("plane", "xy")
-        cx = args.get("cx", 0)
-        cy = args.get("cy", 0)
-        cz = args.get("cz", 0)
-        return f"create_cylinder {radius} {height} {body_name} {plane} {cx} {cy} {cz}"
-    
-    elif name == "create_box":
-        width = args.get("width", 10)
-        depth = args.get("depth", 10)
-        height = args.get("height", 10)
-        body_name = args.get("name", "none")
-        plane = args.get("plane", "xy")
-        cx = args.get("cx", 0)
-        cy = args.get("cy", 0)
-        cz = args.get("cz", 0)
-        return f"create_box {width} {depth} {height} {body_name} {plane} {cx} {cy} {cz}"
-    
-    elif name == "create_sphere":
-        radius = args.get("radius", 5)
-        body_name = args.get("name", "none")
-        plane = args.get("plane", "xy")
-        cx = args.get("cx", 0)
-        cy = args.get("cy", 0)
-        cz = args.get("cz", 0)
-        return f"create_sphere {radius} {body_name} {plane} {cx} {cy} {cz}"
-    
-    elif name == "create_cone":
-        radius = args.get("radius", 5)
-        height = args.get("height", 10)
-        body_name = args.get("name", "none")
-        plane = args.get("plane", "xy")
-        cx = args.get("cx", 0)
-        cy = args.get("cy", 0)
-        cz = args.get("cz", 0)
-        return f"create_cone {radius} {height} {body_name} {plane} {cx} {cy} {cz}"
-    
-    elif name == "create_sq_pyramid":
-        side = args.get("side_length", 10)
-        height = args.get("height", 10)
-        body_name = args.get("name", "none")
-        plane = args.get("plane", "xy")
-        cx = args.get("cx", 0)
-        cy = args.get("cy", 0)
-        cz = args.get("cz", 0)
-        return f"create_sq_pyramid {side} {height} {body_name} {plane} {cx} {cy} {cz}"
-    
-    elif name == "create_tri_pyramid":
-        side = args.get("side_length", 10)
-        height = args.get("height", 10)
-        body_name = args.get("name", "none")
-        plane = args.get("plane", "xy")
-        cx = args.get("cx", 0)
-        cy = args.get("cy", 0)
-        cz = args.get("cz", 0)
-        return f"create_tri_pyramid {side} {height} {body_name} {plane} {cx} {cy} {cz}"
-    
-    elif name == "select_body":
-        body_name = args.get("body_name", "")
-        return f"select_body {body_name}"
-    
-    elif name == "select_bodies":
-        body_name1 = args.get("body_name1", "")
-        body_name2 = args.get("body_name2", "")
-        return f"select_bodies {body_name1} {body_name2}"
-    
-    elif name == "select_edges":
-        body_name = args.get("body_name", "")
-        edge_type = args.get("edge_type", "all")
-        return f"select_edges {body_name} {edge_type}"
-    
-    elif name == "add_fillet":
-        radius = args.get("radius", 1)
-        return f"add_fillet {radius}"
-    
-    elif name == "move_selection":
-        x = args.get("x_dist", 0)
-        y = args.get("y_dist", 0)
-        z = args.get("z_dist", 0)
-        return f"move_selection {x} {y} {z}"
-    
-    elif name == "rotate_selection":
-        axis = args.get("axis", "z")
-        angle = args.get("angle", 0)
-        cx = args.get("cx", 0)
-        cy = args.get("cy", 0)
-        cz = args.get("cz", 0)
-        return f"rotate_selection {axis} {angle} {cx} {cy} {cz}"
-    
-    elif name == "combine_selection":
-        operation = args.get("operation", "join")
-        return f"combine_selection {operation}"
-    
-    elif name == "combine_by_name":
-        target = args.get("target_body", "")
-        tool = args.get("tool_body", "")
-        operation = args.get("operation", "join")
-        return f"combine_by_name {target} {tool} {operation}"
-    
-    elif name == "undo":
-        return "undo"
-    
-    elif name == "redo":
-        return "redo"
-    
-    else:
-        raise ValueError(f"Unknown tool: {name}")
 
 
 async def main():
