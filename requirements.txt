@@ -1,0 +1,2 @@
+# Fusion 360 MCP Bridge Server - Dependencies
+mcp>=1.0.0

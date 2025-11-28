@@ -1,0 +1,12 @@
+{
+  "mcpServers": {
+    "fusion-cad": {
+      "command": "python",
+      "args": ["E:\\work\\FusionCAD_MCP\\mcp_bridge_server.py"],
+      "env": {
+        "FUSION_COMMAND_FILE": "fusion_command.txt",
+        "FUSION_RESPONSE_FILE": "fusion_response.txt"
+      }
+    }
+  }
+}
