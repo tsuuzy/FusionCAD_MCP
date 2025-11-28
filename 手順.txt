@@ -1,10 +1,17 @@
 
 
-■ターミナル1
+■ターミナル
 node server.js
 
 > Fusion MCP Server running at http://localhost:30000
 
-■ターミナル2
-curl --noproxy localhost -X POST http://localhost:3000/mcp/fusion-command -H "Content-Type: application/json" -d "{\"command\": \"create_cube 10\"}"
+■VSCode
+mcp.jsonから
+"fusion-cad"
+を起動
+
+Autodesk Fusion
+「アドイン」⇒「fusion_mcp_server」を起動
+なぜか、前回起動済みのアドインが消えている場合は、もう一度作りなおし。。
+
 
